@@ -11,12 +11,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ========== INICIALIZAR SESSION STATE ==========
-if 'initialized' not in st.session_state:
-    st.session_state.initialized = True
-    st.session_state.ultimo_registro = None
-    st.session_state.persona_seleccionada = None
-
 # ========== BASE DE DATOS ==========
 def inicializar_db():
     try:
@@ -52,17 +46,17 @@ def inicializar_db():
     except:
         return False
 
-@st.cache_data(ttl=5)
 def obtener_personas():
     try:
         conn = sqlite3.connect('gastos.db')
-        df = pd.read_sql_query("SELECT nombre FROM personas ORDER BY orden", conn)
+        cursor = conn.cursor()
+        cursor.execute("SELECT nombre FROM personas ORDER BY orden")
+        personas = [row[0] for row in cursor.fetchall()]
         conn.close()
-        return df['nombre'].tolist()
+        return personas
     except:
         return ['Ana', 'Luis', 'Maria']
 
-@st.cache_data(ttl=5)
 def obtener_totales():
     try:
         conn = sqlite3.connect('gastos.db')
@@ -79,7 +73,6 @@ def obtener_totales():
     except:
         return pd.DataFrame(columns=['nombre', 'total'])
 
-@st.cache_data(ttl=5)
 def obtener_historial(persona=None, limite=50):
     try:
         conn = sqlite3.connect('gastos.db')
@@ -94,7 +87,6 @@ def obtener_historial(persona=None, limite=50):
     except:
         return pd.DataFrame(columns=['fecha', 'persona', 'monto'])
 
-@st.cache_data(ttl=5)
 def obtener_gastos_por_dia():
     try:
         conn = sqlite3.connect('gastos.db')
@@ -118,8 +110,6 @@ def guardar_gasto(persona, monto):
                       (fecha, persona, float(monto)))
         conn.commit()
         conn.close()
-        # Limpiar caché
-        st.cache_data.clear()
         return True
     except:
         return False
@@ -134,7 +124,6 @@ def eliminar_ultimo_gasto(persona=None):
             cursor.execute("DELETE FROM gastos WHERE id = (SELECT id FROM gastos ORDER BY fecha DESC LIMIT 1)")
         conn.commit()
         conn.close()
-        st.cache_data.clear()
         return True
     except:
         return False
@@ -146,7 +135,6 @@ def agregar_persona(nombre):
         cursor.execute("INSERT INTO personas (nombre, orden) VALUES (?, (SELECT COALESCE(MAX(orden), -1) + 1 FROM personas))", (nombre,))
         conn.commit()
         conn.close()
-        st.cache_data.clear()
         return True
     except:
         return False
@@ -159,7 +147,6 @@ def eliminar_persona(nombre):
         cursor.execute("DELETE FROM gastos WHERE persona = ?", (nombre,))
         conn.commit()
         conn.close()
-        st.cache_data.clear()
         return True
     except:
         return False
@@ -172,7 +159,6 @@ def editar_persona(nombre_antiguo, nombre_nuevo):
         cursor.execute("UPDATE gastos SET persona = ? WHERE persona = ?", (nombre_nuevo, nombre_antiguo))
         conn.commit()
         conn.close()
-        st.cache_data.clear()
         return True
     except:
         return False
@@ -184,6 +170,11 @@ def main():
         st.error("❌ Error al inicializar la base de datos")
         return
     
+    # Verificar si hay que recargar
+    if 'recargar' in st.session_state and st.session_state.recargar:
+        st.session_state.recargar = False
+        st.experimental_rerun()
+    
     # ========== SIDEBAR ==========
     with st.sidebar:
         st.title("⚙️ Configuración")
@@ -194,35 +185,38 @@ def main():
         
         # Agregar persona
         with st.expander("➕ Agregar persona", expanded=False):
-            nueva_persona = st.text_input("Nombre", key="new_person_name")
-            if st.button("Agregar", key="btn_add_person"):
+            nueva_persona = st.text_input("Nombre", key="new_person")
+            if st.button("Agregar", key="add_person_btn"):
                 if nueva_persona and nueva_persona.strip():
                     if agregar_persona(nueva_persona.strip()):
                         st.success(f"✅ {nueva_persona} agregada")
-                        st.rerun()
+                        st.session_state.recargar = True
+                        st.experimental_rerun()
                     else:
                         st.error("❌ Ya existe o nombre inválido")
         
         # Editar/Eliminar
         if personas and len(personas) > 0:
             with st.expander("✏️ Editar/Eliminar", expanded=False):
-                persona_sel = st.selectbox("Seleccionar", personas, key="edit_person_select")
+                persona_sel = st.selectbox("Seleccionar", personas, key="edit_select")
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    nuevo_nom = st.text_input("Nuevo nombre", value=persona_sel, key="edit_name_field")
-                    if st.button("💾 Editar", key="btn_edit_person"):
+                    nuevo_nom = st.text_input("Nuevo nombre", value=persona_sel, key="edit_name")
+                    if st.button("💾 Editar", key="edit_btn"):
                         if nuevo_nom and nuevo_nom != persona_sel:
                             if editar_persona(persona_sel, nuevo_nom):
                                 st.success("✅ Editado")
-                                st.rerun()
+                                st.session_state.recargar = True
+                                st.experimental_rerun()
                 
                 with col2:
-                    if st.button("🗑️ Eliminar", key="btn_delete_person"):
+                    if st.button("🗑️ Eliminar", key="delete_btn"):
                         if len(personas) > 1:
                             if eliminar_persona(persona_sel):
                                 st.success("✅ Eliminado")
-                                st.rerun()
+                                st.session_state.recargar = True
+                                st.experimental_rerun()
                         else:
                             st.error("❌ Debe haber al menos una persona")
         
@@ -266,11 +260,12 @@ def main():
         persona = st.selectbox("Persona", personas, key="gasto_persona")
         monto = st.number_input("Monto ($)", min_value=0.01, step=10.0, format="%.2f", key="gasto_monto")
         
-        if st.button("💾 GUARDAR GASTO", type="primary", use_container_width=True, key="btn_guardar"):
+        if st.button("💾 GUARDAR GASTO", type="primary", use_container_width=True, key="guardar_btn"):
             if monto > 0:
                 if guardar_gasto(persona, monto):
                     st.success(f"✅ Gasto de ${monto:.2f} guardado para {persona}")
-                    st.rerun()
+                    st.session_state.recargar = True
+                    st.experimental_rerun()
                 else:
                     st.error("❌ Error al guardar")
             else:
@@ -278,12 +273,13 @@ def main():
     
     with col2:
         st.subheader("↩️ Deshacer")
-        deshacer_tipo = st.radio("Tipo", ["Global", "Solo esta persona"], key="deshacer_tipo", horizontal=True)
-        if st.button("🗑️ Deshacer último", use_container_width=True, key="btn_deshacer"):
-            persona_filtro = persona if deshacer_tipo == "Solo esta persona" else None
+        deshacer_tipo = st.radio("Tipo", ["Global", "Solo esta"], key="deshacer_tipo", horizontal=True)
+        if st.button("🗑️ Deshacer último", use_container_width=True, key="deshacer_btn"):
+            persona_filtro = persona if deshacer_tipo == "Solo esta" else None
             if eliminar_ultimo_gasto(persona_filtro):
                 st.success("✅ Último gasto eliminado")
-                st.rerun()
+                st.session_state.recargar = True
+                st.experimental_rerun()
             else:
                 st.error("❌ No hay gastos para eliminar")
     
@@ -318,7 +314,7 @@ def main():
                         title="Gastos por persona",
                         color='nombre')
             fig.update_layout(showlegend=False, height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="bar_chart")
         else:
             st.info("No hay datos para mostrar")
     
@@ -328,7 +324,7 @@ def main():
                         title="Distribución de gastos",
                         hole=0.3)
             fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="pie_chart")
         else:
             st.info("No hay datos para mostrar")
     
@@ -338,7 +334,7 @@ def main():
                          title="Evolución diaria de gastos",
                          markers=True)
             fig.update_layout(xaxis_title="Fecha", yaxis_title="Monto ($)", height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="line_chart")
         else:
             st.info("No hay datos suficientes para la evolución")
     
@@ -363,7 +359,7 @@ def main():
         df_display['monto'] = df_display['monto'].apply(lambda x: f"${x:.2f}")
         df_display = df_display.rename(columns={'fecha': 'Fecha', 'persona': 'Persona', 'monto': 'Monto'})
         
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        st.dataframe(df_display, use_container_width=True, hide_index=True, key="historial_df")
     else:
         st.info("📭 No hay gastos registrados")
     
