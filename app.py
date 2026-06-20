@@ -3,24 +3,26 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import plotly.express as px
-import plotly.graph_objects as go
 
 # ========== CONFIGURACIÓN ==========
 st.set_page_config(
     page_title="💰 Gestor de Gastos",
     page_icon="💰",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
+
+# ========== INICIALIZAR SESSION STATE ==========
+if 'initialized' not in st.session_state:
+    st.session_state.initialized = True
+    st.session_state.ultimo_registro = None
+    st.session_state.persona_seleccionada = None
 
 # ========== BASE DE DATOS ==========
 def inicializar_db():
-    """Crea las tablas necesarias"""
     try:
         conn = sqlite3.connect('gastos.db')
         cursor = conn.cursor()
         
-        # Tabla de gastos
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS gastos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +32,6 @@ def inicializar_db():
             )
         ''')
         
-        # Tabla de personas
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS personas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +40,6 @@ def inicializar_db():
             )
         ''')
         
-        # Insertar personas por defecto
         cursor.execute("SELECT COUNT(*) FROM personas")
         if cursor.fetchone()[0] == 0:
             personas_default = ['Ana', 'Luis', 'Maria']
@@ -49,12 +49,11 @@ def inicializar_db():
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
-        st.error(f"Error en base de datos: {e}")
+    except:
         return False
 
+@st.cache_data(ttl=5)
 def obtener_personas():
-    """Obtiene lista de personas"""
     try:
         conn = sqlite3.connect('gastos.db')
         df = pd.read_sql_query("SELECT nombre FROM personas ORDER BY orden", conn)
@@ -63,76 +62,8 @@ def obtener_personas():
     except:
         return ['Ana', 'Luis', 'Maria']
 
-def agregar_persona(nombre):
-    """Agrega nueva persona"""
-    try:
-        conn = sqlite3.connect('gastos.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO personas (nombre, orden) VALUES (?, (SELECT COALESCE(MAX(orden), -1) + 1 FROM personas))", (nombre,))
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        return False
-
-def eliminar_persona(nombre):
-    """Elimina persona y sus gastos"""
-    try:
-        conn = sqlite3.connect('gastos.db')
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM personas WHERE nombre = ?", (nombre,))
-        cursor.execute("DELETE FROM gastos WHERE persona = ?", (nombre,))
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        return False
-
-def editar_persona(nombre_antiguo, nombre_nuevo):
-    """Edita nombre de persona"""
-    try:
-        conn = sqlite3.connect('gastos.db')
-        cursor = conn.cursor()
-        cursor.execute("UPDATE personas SET nombre = ? WHERE nombre = ?", (nombre_nuevo, nombre_antiguo))
-        cursor.execute("UPDATE gastos SET persona = ? WHERE persona = ?", (nombre_nuevo, nombre_antiguo))
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        return False
-
-def guardar_gasto(persona, monto):
-    """Guarda un gasto"""
-    try:
-        conn = sqlite3.connect('gastos.db')
-        cursor = conn.cursor()
-        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("INSERT INTO gastos (fecha, persona, monto) VALUES (?, ?, ?)", 
-                      (fecha, persona, float(monto)))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        st.error(f"Error al guardar: {e}")
-        return False
-
-def eliminar_ultimo_gasto(persona=None):
-    """Elimina el último gasto"""
-    try:
-        conn = sqlite3.connect('gastos.db')
-        cursor = conn.cursor()
-        if persona:
-            cursor.execute("DELETE FROM gastos WHERE id = (SELECT id FROM gastos WHERE persona = ? ORDER BY fecha DESC LIMIT 1)", (persona,))
-        else:
-            cursor.execute("DELETE FROM gastos WHERE id = (SELECT id FROM gastos ORDER BY fecha DESC LIMIT 1)")
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        return False
-
+@st.cache_data(ttl=5)
 def obtener_totales():
-    """Obtiene totales por persona"""
     try:
         conn = sqlite3.connect('gastos.db')
         query = '''
@@ -148,8 +79,8 @@ def obtener_totales():
     except:
         return pd.DataFrame(columns=['nombre', 'total'])
 
+@st.cache_data(ttl=5)
 def obtener_historial(persona=None, limite=50):
-    """Obtiene historial de gastos"""
     try:
         conn = sqlite3.connect('gastos.db')
         if persona:
@@ -163,8 +94,8 @@ def obtener_historial(persona=None, limite=50):
     except:
         return pd.DataFrame(columns=['fecha', 'persona', 'monto'])
 
+@st.cache_data(ttl=5)
 def obtener_gastos_por_dia():
-    """Obtiene gastos agrupados por día"""
     try:
         conn = sqlite3.connect('gastos.db')
         df = pd.read_sql_query("""
@@ -178,58 +109,75 @@ def obtener_gastos_por_dia():
     except:
         return pd.DataFrame(columns=['dia', 'persona', 'total'])
 
-# ========== FUNCIONES DE INTERFAZ ==========
-def mostrar_totales(df_totales):
-    """Muestra tarjetas de totales"""
-    if df_totales.empty:
-        st.info("No hay gastos registrados aún")
-        return
-    
-    cols = st.columns(min(len(df_totales), 4))
-    for idx, row in df_totales.iterrows():
-        with cols[idx % len(cols)]:
-            st.metric(
-                label=f"👤 {row['nombre']}",
-                value=f"${row['total']:,.2f}",
-                delta=None
-            )
+def guardar_gasto(persona, monto):
+    try:
+        conn = sqlite3.connect('gastos.db')
+        cursor = conn.cursor()
+        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("INSERT INTO gastos (fecha, persona, monto) VALUES (?, ?, ?)", 
+                      (fecha, persona, float(monto)))
+        conn.commit()
+        conn.close()
+        # Limpiar caché
+        st.cache_data.clear()
+        return True
+    except:
+        return False
 
-def mostrar_graficos(df_totales, df_diario):
-    """Muestra gráficos interactivos"""
-    tab1, tab2, tab3 = st.tabs(["📊 Barras", "🥧 Pastel", "📅 Evolución"])
-    
-    with tab1:
-        if not df_totales.empty and df_totales['total'].sum() > 0:
-            fig = px.bar(df_totales, x='nombre', y='total', 
-                        title="Gastos por persona",
-                        color='nombre',
-                        color_discrete_sequence=px.colors.qualitative.Set2)
-            fig.update_layout(showlegend=False, height=400)
-            st.plotly_chart(fig, use_container_width=True, key="bar_chart")
+def eliminar_ultimo_gasto(persona=None):
+    try:
+        conn = sqlite3.connect('gastos.db')
+        cursor = conn.cursor()
+        if persona:
+            cursor.execute("DELETE FROM gastos WHERE id = (SELECT id FROM gastos WHERE persona = ? ORDER BY fecha DESC LIMIT 1)", (persona,))
         else:
-            st.info("No hay datos para mostrar")
-    
-    with tab2:
-        if not df_totales.empty and df_totales['total'].sum() > 0:
-            fig = px.pie(df_totales, values='total', names='nombre',
-                        title="Distribución de gastos",
-                        hole=0.3)
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True, key="pie_chart")
-        else:
-            st.info("No hay datos para mostrar")
-    
-    with tab3:
-        if not df_diario.empty:
-            fig = px.line(df_diario, x='dia', y='total', color='persona',
-                         title="Evolución diaria de gastos",
-                         markers=True)
-            fig.update_layout(xaxis_title="Fecha", yaxis_title="Monto ($)", height=400)
-            st.plotly_chart(fig, use_container_width=True, key="line_chart")
-        else:
-            st.info("No hay datos suficientes para la evolución")
+            cursor.execute("DELETE FROM gastos WHERE id = (SELECT id FROM gastos ORDER BY fecha DESC LIMIT 1)")
+        conn.commit()
+        conn.close()
+        st.cache_data.clear()
+        return True
+    except:
+        return False
 
-# ========== FUNCIÓN PRINCIPAL ==========
+def agregar_persona(nombre):
+    try:
+        conn = sqlite3.connect('gastos.db')
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO personas (nombre, orden) VALUES (?, (SELECT COALESCE(MAX(orden), -1) + 1 FROM personas))", (nombre,))
+        conn.commit()
+        conn.close()
+        st.cache_data.clear()
+        return True
+    except:
+        return False
+
+def eliminar_persona(nombre):
+    try:
+        conn = sqlite3.connect('gastos.db')
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM personas WHERE nombre = ?", (nombre,))
+        cursor.execute("DELETE FROM gastos WHERE persona = ?", (nombre,))
+        conn.commit()
+        conn.close()
+        st.cache_data.clear()
+        return True
+    except:
+        return False
+
+def editar_persona(nombre_antiguo, nombre_nuevo):
+    try:
+        conn = sqlite3.connect('gastos.db')
+        cursor = conn.cursor()
+        cursor.execute("UPDATE personas SET nombre = ? WHERE nombre = ?", (nombre_nuevo, nombre_antiguo))
+        cursor.execute("UPDATE gastos SET persona = ? WHERE persona = ?", (nombre_nuevo, nombre_antiguo))
+        conn.commit()
+        conn.close()
+        st.cache_data.clear()
+        return True
+    except:
+        return False
+
+# ========== INTERFAZ PRINCIPAL ==========
 def main():
     # Inicializar DB
     if not inicializar_db():
@@ -240,43 +188,39 @@ def main():
     with st.sidebar:
         st.title("⚙️ Configuración")
         
-        # Gestión de personas
+        # Personas
         st.subheader("👥 Personas")
         personas = obtener_personas()
         
-        # Agregar nueva persona
-        with st.form(key="add_person_form"):
-            nueva_persona = st.text_input("➕ Nueva persona", key="new_person_input")
-            submit_add = st.form_submit_button("Agregar")
-            if submit_add and nueva_persona and nueva_persona.strip():
-                if agregar_persona(nueva_persona.strip()):
-                    st.success(f"✅ {nueva_persona} agregada")
-                    st.rerun()
-                else:
-                    st.error("❌ Ya existe o nombre inválido")
+        # Agregar persona
+        with st.expander("➕ Agregar persona", expanded=False):
+            nueva_persona = st.text_input("Nombre", key="new_person_name")
+            if st.button("Agregar", key="btn_add_person"):
+                if nueva_persona and nueva_persona.strip():
+                    if agregar_persona(nueva_persona.strip()):
+                        st.success(f"✅ {nueva_persona} agregada")
+                        st.rerun()
+                    else:
+                        st.error("❌ Ya existe o nombre inválido")
         
-        # Editar/Eliminar personas
+        # Editar/Eliminar
         if personas and len(personas) > 0:
-            st.divider()
-            st.write("✏️ Editar personas:")
-            
-            with st.form(key="edit_person_form"):
-                persona_seleccionada = st.selectbox("Seleccionar", personas, key="edit_select")
-                nuevo_nombre = st.text_input("Nuevo nombre", value=persona_seleccionada, key="edit_name_input")
+            with st.expander("✏️ Editar/Eliminar", expanded=False):
+                persona_sel = st.selectbox("Seleccionar", personas, key="edit_person_select")
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    submit_edit = st.form_submit_button("💾 Editar")
-                    if submit_edit and nuevo_nombre and nuevo_nombre != persona_seleccionada:
-                        if editar_persona(persona_seleccionada, nuevo_nombre):
-                            st.success("✅ Editado")
-                            st.rerun()
+                    nuevo_nom = st.text_input("Nuevo nombre", value=persona_sel, key="edit_name_field")
+                    if st.button("💾 Editar", key="btn_edit_person"):
+                        if nuevo_nom and nuevo_nom != persona_sel:
+                            if editar_persona(persona_sel, nuevo_nom):
+                                st.success("✅ Editado")
+                                st.rerun()
                 
                 with col2:
-                    submit_delete = st.form_submit_button("🗑️ Eliminar")
-                    if submit_delete:
+                    if st.button("🗑️ Eliminar", key="btn_delete_person"):
                         if len(personas) > 1:
-                            if eliminar_persona(persona_seleccionada):
+                            if eliminar_persona(persona_sel):
                                 st.success("✅ Eliminado")
                                 st.rerun()
                         else:
@@ -284,22 +228,22 @@ def main():
         
         st.divider()
         
-        # Exportar datos
+        # Exportar
         st.subheader("📊 Exportar")
-        df_export = obtener_historial(limite=1000)
-        if not df_export.empty:
+        df_exp = obtener_historial(limite=1000)
+        if not df_exp.empty:
             from io import BytesIO
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_export.to_excel(writer, sheet_name='Historial', index=False)
+                df_exp.to_excel(writer, sheet_name='Historial', index=False)
                 obtener_totales().to_excel(writer, sheet_name='Totales', index=False)
             
             st.download_button(
                 label="📥 Descargar Excel",
                 data=output.getvalue(),
-                file_name=f"gastos_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"gastos_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_excel"
+                key="download_btn"
             )
         else:
             st.info("No hay datos para exportar")
@@ -307,98 +251,134 @@ def main():
     # ========== CONTENIDO PRINCIPAL ==========
     st.title("💰 Gestor de Gastos Compartidos")
     
+    # Obtener datos
+    personas = obtener_personas()
+    if not personas:
+        st.warning("⚠️ Agrega personas en la barra lateral")
+        return
+    
     # ========== REGISTRO RÁPIDO ==========
-    with st.container():
-        st.subheader("📝 Registrar gasto")
+    st.subheader("📝 Registrar gasto")
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        persona = st.selectbox("Persona", personas, key="gasto_persona")
+        monto = st.number_input("Monto ($)", min_value=0.01, step=10.0, format="%.2f", key="gasto_monto")
         
-        personas_actuales = obtener_personas()
-        if not personas_actuales:
-            st.warning("⚠️ Agrega al menos una persona en la barra lateral")
-            return
-        
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            with st.form(key="gasto_form"):
-                persona = st.selectbox("Persona", personas_actuales, key="persona_select")
-                monto = st.number_input("Monto ($)", min_value=0.01, step=10.0, format="%.2f", key="monto_input")
-                submit_gasto = st.form_submit_button("💾 GUARDAR GASTO", type="primary", use_container_width=True)
-                
-                if submit_gasto and monto > 0:
-                    if guardar_gasto(persona, monto):
-                        st.success(f"✅ Gasto de ${monto:.2f} guardado para {persona}")
-                        st.rerun()
-                    else:
-                        st.error("❌ Error al guardar")
-        
-        with col2:
-            st.subheader("↩️ Deshacer")
-            with st.form(key="deshacer_form"):
-                deshacer_tipo = st.radio("Tipo", ["Último global", "Solo esta persona"], key="deshacer_tipo")
-                submit_deshacer = st.form_submit_button("🗑️ Deshacer", use_container_width=True)
-                
-                if submit_deshacer:
-                    persona_filtro = persona if deshacer_tipo == "Solo esta persona" else None
-                    if eliminar_ultimo_gasto(persona_filtro):
-                        st.success("✅ Último gasto eliminado")
-                        st.rerun()
-                    else:
-                        st.error("❌ No hay gastos para eliminar")
+        if st.button("💾 GUARDAR GASTO", type="primary", use_container_width=True, key="btn_guardar"):
+            if monto > 0:
+                if guardar_gasto(persona, monto):
+                    st.success(f"✅ Gasto de ${monto:.2f} guardado para {persona}")
+                    st.rerun()
+                else:
+                    st.error("❌ Error al guardar")
+            else:
+                st.error("❌ Ingresa un monto válido")
+    
+    with col2:
+        st.subheader("↩️ Deshacer")
+        deshacer_tipo = st.radio("Tipo", ["Global", "Solo esta persona"], key="deshacer_tipo", horizontal=True)
+        if st.button("🗑️ Deshacer último", use_container_width=True, key="btn_deshacer"):
+            persona_filtro = persona if deshacer_tipo == "Solo esta persona" else None
+            if eliminar_ultimo_gasto(persona_filtro):
+                st.success("✅ Último gasto eliminado")
+                st.rerun()
+            else:
+                st.error("❌ No hay gastos para eliminar")
     
     # ========== TOTALES ==========
     st.divider()
     st.subheader("💰 Totales acumulados")
     
     df_totales = obtener_totales()
-    mostrar_totales(df_totales)
+    if not df_totales.empty:
+        cols = st.columns(min(len(df_totales), 4))
+        for idx, row in df_totales.iterrows():
+            with cols[idx % len(cols)]:
+                st.metric(
+                    label=f"👤 {row['nombre']}",
+                    value=f"${row['total']:,.2f}",
+                    delta=None
+                )
+    else:
+        st.info("No hay gastos registrados")
     
     # ========== GRÁFICOS ==========
     st.divider()
     st.subheader("📈 Visualizaciones")
     
     df_diario = obtener_gastos_por_dia()
-    mostrar_graficos(df_totales, df_diario)
+    
+    tab1, tab2, tab3 = st.tabs(["📊 Barras", "🥧 Pastel", "📅 Evolución"])
+    
+    with tab1:
+        if not df_totales.empty and df_totales['total'].sum() > 0:
+            fig = px.bar(df_totales, x='nombre', y='total', 
+                        title="Gastos por persona",
+                        color='nombre')
+            fig.update_layout(showlegend=False, height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No hay datos para mostrar")
+    
+    with tab2:
+        if not df_totales.empty and df_totales['total'].sum() > 0:
+            fig = px.pie(df_totales, values='total', names='nombre',
+                        title="Distribución de gastos",
+                        hole=0.3)
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No hay datos para mostrar")
+    
+    with tab3:
+        if not df_diario.empty:
+            fig = px.line(df_diario, x='dia', y='total', color='persona',
+                         title="Evolución diaria de gastos",
+                         markers=True)
+            fig.update_layout(xaxis_title="Fecha", yaxis_title="Monto ($)", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No hay datos suficientes para la evolución")
     
     # ========== HISTORIAL ==========
     st.divider()
     st.subheader("📜 Historial de gastos")
     
-    col_filtro1, col_filtro2 = st.columns([1, 2])
-    with col_filtro1:
-        filtro_persona = st.selectbox("Filtrar por persona", ["Todas"] + obtener_personas(), key="filtro_historial")
+    col_f1, col_f2 = st.columns([1, 2])
+    with col_f1:
+        filtro = st.selectbox("Filtrar", ["Todas"] + personas, key="filtro_historial")
+    with col_f2:
+        limite = st.slider("Mostrar", 5, 100, 20, key="limite_historial")
     
-    with col_filtro2:
-        limite = st.slider("Mostrar últimos", 5, 100, 20, key="limite_historial")
-    
-    # Mostrar historial
-    if filtro_persona == "Todas":
-        df_historial = obtener_historial(limite=limite)
+    if filtro == "Todas":
+        df_hist = obtener_historial(limite=limite)
     else:
-        df_historial = obtener_historial(persona=filtro_persona, limite=limite)
+        df_hist = obtener_historial(persona=filtro, limite=limite)
     
-    if not df_historial.empty:
-        # Formatear para mostrar
-        df_display = df_historial.copy()
+    if not df_hist.empty:
+        df_display = df_hist.copy()
         df_display['fecha'] = pd.to_datetime(df_display['fecha']).dt.strftime('%Y-%m-%d %H:%M')
         df_display['monto'] = df_display['monto'].apply(lambda x: f"${x:.2f}")
         df_display = df_display.rename(columns={'fecha': 'Fecha', 'persona': 'Persona', 'monto': 'Monto'})
         
         st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
-        st.info("📭 No hay gastos registrados aún")
+        st.info("📭 No hay gastos registrados")
     
     # ========== ESTADÍSTICAS ==========
-    if filtro_persona != "Todas" and not df_historial.empty:
+    if filtro != "Todas" and not df_hist.empty:
         st.divider()
-        st.subheader(f"📊 Estadísticas de {filtro_persona}")
+        st.subheader(f"📊 Estadísticas de {filtro}")
         
         col_e1, col_e2, col_e3 = st.columns(3)
         with col_e1:
-            st.metric("Total gastado", f"${df_historial['monto'].sum():,.2f}")
+            st.metric("Total", f"${df_hist['monto'].sum():,.2f}")
         with col_e2:
-            st.metric("Promedio por gasto", f"${df_historial['monto'].mean():.2f}")
+            st.metric("Promedio", f"${df_hist['monto'].mean():.2f}")
         with col_e3:
-            st.metric("Cantidad de gastos", len(df_historial))
+            st.metric("Cantidad", len(df_hist))
 
 if __name__ == "__main__":
     main()
